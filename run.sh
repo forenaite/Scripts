@@ -21,7 +21,7 @@ if [ $# -eq 0 ] || [ "$1" = "help" ] || [ "$1" = "--help" ]; then
     exit 0
 fi
 
-mkdir -p results analysis final translations logs
+mkdir -p results analysis final translations logs reports
 
 exec podman run --rm \
     -v $(pwd):/app/workspace \
