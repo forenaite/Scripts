@@ -4,8 +4,8 @@
 # Andre Rocha
 
 # License
-This project is licensed under the [GNU General Public License v3 (GPLv3)](https://www.gnu.org/licenses/gpl-3.0.html).
-See the `LICENSE` file for full details.
+# This project is licensed under the [GNU General Public License v3 (GPLv3)](https://www.gnu.org/licenses/gpl-3.0.html).
+# See the `LICENSE` file for full details.
 
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
 IMAGE="quay.io/andrerocha_redhat/ai-health-check-tool:1.0.0-${ARCH}"
