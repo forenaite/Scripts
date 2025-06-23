@@ -10,6 +10,7 @@
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
 IMAGE="quay.io/andrerocha_redhat/ai-health-check-tool:1.0.0-${ARCH}"
 
+# Function to detect and report SELinux status
 check_selinux_status() {
     if command -v getenforce >/dev/null 2>&1; then
         local selinux_status=$(getenforce 2>/dev/null)
@@ -39,8 +40,9 @@ check_pdf_generator_usage() {
     # Verifica se o comando envolve geração de PDF
     local command_string="$*"
 
-    if echo "$command_string" | grep -q "generate_pdf\|pdf.*gen\|\.pdf"; then
-        echo "DETECTADO: Tentativa de usar gerador de PDF"
+    # Verifica especificamente se é generate_pdf.py (deve rodar no host)
+    if echo "$command_string" | grep -q "generate_pdf\.py"; then
+        echo "DETECTADO: Tentativa de usar gerador de PDF (Python)"
         echo ""
         echo " RECOMENDAÇÃO: Geradores de PDF devem rodar NO HOST"
         echo "   Problema: Container → Podman → Pandoc (containers aninhados)"
@@ -262,6 +264,7 @@ check_pdf_generator_usage() {
     fi
 }
 
+# Function to generate ai_config.json from .env or create with placeholders
 generate_ai_config() {
     if [ ! -f ai_config.json ]; then
         if [ -f .env ]; then
@@ -349,6 +352,7 @@ EOF
     fi
 }
 
+# Function to validate configuration
 check_config_status() {
     local has_env=false
     local has_ai_config=false
@@ -376,8 +380,9 @@ check_config_status() {
     echo ""
 }
 
+# Simple help
 if [ $# -eq 0 ] || [ "$1" = "help" ] || [ "$1" = "--help" ]; then
-    echo "AI Health Check Tool - Simple Wrapper"
+    echo "AI Health Check Tool - Ultra-Simple Wrapper"
     echo ""
     echo "USAGE: $0 <command> [arguments]"
     echo ""
@@ -393,23 +398,21 @@ if [ $# -eq 0 ] || [ "$1" = "help" ] || [ "$1" = "--help" ]; then
     echo "    2. Run any command - ai_config.json will be auto-generated"
     echo ""
     echo "PDF GENERATION:"
-    echo "    IMPORTANTE: Geradores de PDF devem rodar NO HOST"
-    echo "    Container → Podman → Pandoc causa problemas (containers aninhados)"
-    echo "    Solução: Use extração automática oferecida pelo script"
-    echo ""
-    echo "    Exemplo que acionará extração automática:"
-    echo "    $0 python scripts/generate_pdf.py relatorio.md"
+    echo "    generate_pdf.py   # Recomenda extração para HOST (containers aninhados)"
+    echo "    generate_pdf.sh   # Executa no HOST extraindo do container"
     echo ""
     echo "EXAMPLES:"
     echo "    $0 oc login -u admin -p pass https://api.cluster.com:6443"
     echo "    $0 scripts/data_collector.sh --help"
     echo "    $0 scripts/ai_analyser_dynamic.py"
+    echo "    $0 scripts/generate_pdf.sh -a \"Andre\" -c \"Company\" file.md"
     echo ""
     exit 0
 fi
 
-# Verifica se é uma tentativa de uso de gerador de PDF
+# Show status and generate config only for non-help commands
 if [ "$1" != "help" ] && [ "$1" != "--help" ]; then
+    # Check for PDF generator usage before proceeding
     check_pdf_generator_usage "$@"
     check_selinux_status
     check_config_status
@@ -418,6 +421,7 @@ fi
 
 mkdir -p results analysis final translations logs reports oc-config
 
+# Build volume mounts for config files
 CONFIG_MOUNTS=""
 if [ -f .env ]; then
     CONFIG_MOUNTS="$CONFIG_MOUNTS --env-file .env"
@@ -426,6 +430,52 @@ if [ -f ai_config.json ]; then
     CONFIG_MOUNTS="$CONFIG_MOUNTS -v $(pwd)/ai_config.json:/app/ai_config.json"
 fi
 
+# Special handling for PDF generation - execute on host instead of container
+if [[ "$1" == "scripts/generate_pdf.sh" ]]; then
+    echo "INFO: Detectado generate_pdf.sh - executando no host para evitar container-in-container..."
+    echo ""
+
+    # Check if podman/docker is available on host (script will use containers)
+    if ! command -v podman >/dev/null 2>&1 && ! command -v docker >/dev/null 2>&1; then
+        echo "ERRO: Nem podman nem docker encontrados no PATH do host"
+        exit 1
+    fi
+
+    # Ensure required files are available on host
+    # Check and copy metadata.yaml if it doesn't exist
+    if [[ ! -f "metadata.yaml" ]]; then
+        echo "INFO: metadata.yaml não encontrado localmente, copiando do container..."
+
+        # Use volume mount to copy file - more reliable than podman cp
+        podman run --rm \
+            --security-opt label=disable \
+            -v "$(pwd)":/tmp/host \
+            "${IMAGE}" \
+            cp /app/metadata.yaml /tmp/host/metadata.yaml
+
+        if [[ -f "metadata.yaml" ]]; then
+            echo "INFO: metadata.yaml copiado com sucesso!"
+        else
+            echo "ERRO: Falha ao copiar metadata.yaml"
+            exit 1
+        fi
+    fi
+
+    # Extract and execute the script from container on the host
+    # The script will run on host but still use containers for pandoc
+    # This avoids container-in-container issues
+    echo "INFO: Extraindo e executando script do container no host..."
+    podman run --rm \
+        --security-opt label=disable \
+        -v "$(pwd)":/app/workspace \
+        $CONFIG_MOUNTS \
+        "${IMAGE}" cat /app/scripts/generate_pdf.sh | \
+        bash -s -- "${@:2}"
+
+    exit $?
+fi
+
+# Normal container execution for all other commands
 exec podman run --rm \
     --security-opt label=disable \
     -v $(pwd):/app/workspace \
