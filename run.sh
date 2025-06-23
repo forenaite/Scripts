@@ -35,6 +35,233 @@ check_selinux_status() {
     fi
 }
 
+check_pdf_generator_usage() {
+    # Verifica se o comando envolve geração de PDF
+    local command_string="$*"
+
+    if echo "$command_string" | grep -q "generate_pdf\|pdf.*gen\|\.pdf"; then
+        echo "DETECTADO: Tentativa de usar gerador de PDF"
+        echo ""
+        echo " RECOMENDAÇÃO: Geradores de PDF devem rodar NO HOST"
+        echo "   Problema: Container → Podman → Pandoc (containers aninhados)"
+        echo "   Solução: Extrair script e executar localmente"
+        echo ""
+        echo "INSTRUÇÕES PARA EXTRAIR O GERADOR DE PDF:"
+        echo ""
+
+        # Verifica se Podman está disponível
+        if command -v podman >/dev/null 2>&1; then
+            container_runtime="podman"
+        elif command -v docker >/dev/null 2>&1; then
+            container_runtime="docker"
+        else
+            container_runtime="podman"
+        fi
+
+        echo "# 1. EXTRAÇÃO AUTOMÁTICA (recomendado):"
+        echo "#    Execute este comando no HOST:"
+        echo ""
+        echo "$container_runtime run --rm \\"
+        echo "    -v \$(pwd):/host-output \\"
+        echo "    ${IMAGE} \\"
+        echo "    cp /app/scripts/generate_pdf.py /host-output/"
+        echo ""
+        echo "# 2. EXTRAÇÃO MANUAL:"
+        echo "#    Descubra o container e copie:"
+        echo "$container_runtime ps"
+        echo "$container_runtime cp CONTAINER_ID:/app/scripts/generate_pdf.py ./"
+        echo ""
+        echo "# 3. DEPENDÊNCIAS NO HOST:"
+        echo "pip install PyYAML"
+        echo "# + $container_runtime instalado"
+        echo ""
+        echo "# 4. USO NO HOST:"
+        echo "python generate_pdf.py -a \"Seu Nome\" -c \"Sua Empresa\" relatorio.md"
+        echo ""
+        echo "VANTAGENS DE RODAR NO HOST:"
+        echo "   Sem problemas de containers aninhados"
+        echo "   Melhor performance"
+        echo "   Acesso direto aos arquivos"
+        echo "   Menos overhead"
+        echo ""
+
+        # Oferece extração automática
+        echo "EXTRAÇÃO AUTOMÁTICA DISPONÍVEL:"
+        echo ""
+        read -p "Deseja extrair o gerador de PDF automaticamente? [y/N]: " -n 1 -r
+        echo ""
+
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            echo "Extraindo gerador de PDF..."
+
+            # Remove arquivo existente se houver
+            rm -f generate_pdf.py 2>/dev/null
+
+            # Método 1: Tenta com mapeamento de usuário
+            echo "Tentativa 1: Extração com mapeamento de usuário..."
+            $container_runtime run --rm \
+                --user "$(id -u):$(id -g)" \
+                -v "$(pwd):/host-output" \
+                "${IMAGE}" \
+                sh -c "cp /app/scripts/generate_pdf.py /host-output/ 2>/dev/null" >/dev/null 2>&1
+
+            # Verifica se método 1 funcionou
+            extracted_file=""
+            if [ -f "generate_pdf.py" ] && [ -s "generate_pdf.py" ] && head -1 "generate_pdf.py" | grep -q "#!/usr/bin/env python3\|#!/usr/bin/python3\|# Script\|import"; then
+                extracted_file="generate_pdf.py"
+                echo "Método 1 bem-sucedido!"
+            else
+                echo "Falha ao extrair. Verifique o SELinux."
+            fi
+
+            # Método 2: Redirecionamento se método 1 falhou
+            if [ -z "$extracted_file" ]; then
+                echo "Tentativa 2: Extração via redirecionamento..."
+
+                # Verifica se o arquivo existe no container
+                if $container_runtime run --rm "${IMAGE}" test -f /app/scripts/generate_pdf.py >/dev/null 2>&1; then
+                    $container_runtime run --rm "${IMAGE}" \
+                        cat /app/scripts/generate_pdf.py > generate_pdf.py 2>/dev/null
+
+                    # Verifica se redirecionamento funcionou
+                    if [ -f "generate_pdf.py" ] && [ -s "generate_pdf.py" ] && head -1 generate_pdf.py | grep -q "#!/usr/bin/env python3\|#!/usr/bin/python3\|# Script\|import"; then
+                        extracted_file="generate_pdf.py"
+                        echo "Método 2 bem-sucedido!"
+                    fi
+                else
+                    echo "Arquivo /app/scripts/generate_pdf.py não encontrado no container"
+                fi
+            fi
+
+            # Método 3: SELinux workaround se métodos anteriores falharam
+            if [ -z "$extracted_file" ]; then
+                echo "Tentativa 3: Workaround para SELinux..."
+
+                # Verifica se SELinux pode estar causando problemas
+                if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce 2>/dev/null)" = "Enforcing" ]; then
+                    echo " SELinux detectado em modo Enforcing - pode estar bloqueando"
+                fi
+
+                # Tenta criar em diretório temporário e mover
+                temp_dir=$(mktemp -d)
+                $container_runtime run --rm \
+                    -v "$temp_dir:/temp-output" \
+                    "${IMAGE}" \
+                    sh -c "cp /app/scripts/generate_pdf.py /temp-output/ 2>/dev/null" >/dev/null 2>&1
+
+                # Move para diretório atual
+                if [ -f "$temp_dir/generate_pdf.py" ] && [ -s "$temp_dir/generate_pdf.py" ]; then
+                    cp "$temp_dir/generate_pdf.py" "./generate_pdf.py" 2>/dev/null
+                    extracted_file="generate_pdf.py"
+                    echo "Método 3 bem-sucedido!"
+                fi
+
+                rm -rf "$temp_dir"
+            fi
+
+            # Verificação final robusta
+            if [ -n "$extracted_file" ] && [ -f "$extracted_file" ] && [ -s "$extracted_file" ]; then
+                # Verifica se é realmente um script Python válido
+                if head -5 "$extracted_file" | grep -q "import\|def\|class\|python"; then
+                    file_size=$(stat -f%z "$extracted_file" 2>/dev/null || stat -c%s "$extracted_file" 2>/dev/null || echo "0")
+
+                    if [ "$file_size" -gt 1000 ]; then  # Script deve ter pelo menos 1KB
+                        echo ""
+                        echo "Gerador de PDF extraído com sucesso!"
+                        echo "Arquivo: $extracted_file ($file_size bytes)"
+                        echo ""
+
+                        # Verifica se tem dependências problemáticas
+                        if grep -q "weasyprint\|WeasyPrint" "$extracted_file" 2>/dev/null; then
+                            echo " AVISO: Arquivo extraído usa WeasyPrint (pode precisar libs sistema)"
+                            echo "  Alternativa: sudo apt install libpango-1.0-0 libharfbuzz0b"
+                            echo "  OU: Use método de redirecionamento para obter versão container"
+                        elif grep -q "container_cmd\|podman\|docker" "$extracted_file" 2>/dev/null; then
+                            echo "Versão correta detectada (usa containers)"
+                        fi
+
+                        echo ""
+                        echo "PRÓXIMOS PASSOS:"
+                        echo "1. Instale as dependências:"
+                        echo "   pip install PyYAML"
+                        echo ""
+                        echo "2. Teste o gerador:"
+                        echo "   python3 $extracted_file --help"
+                        echo ""
+                        echo "3. Use o gerador:"
+                        echo "   python3 $extracted_file -a \"Seu Nome\" -c \"Empresa\" arquivo.md"
+                        echo ""
+                        echo "O gerador agora roda diretamente no HOST!"
+
+                        exit 0
+                    else
+                        echo "Arquivo extraído está vazio ou muito pequeno ($file_size bytes)"
+                    fi
+                else
+                    echo "Arquivo extraído não parece ser um script Python válido"
+                fi
+            fi
+
+            # Se chegou até aqui, a extração falhou
+            echo ""
+            echo "TODAS as tentativas de extração automática falharam"
+            echo ""
+            echo "DIAGNÓSTICO POSSÍVEL:"
+            if command -v getenforce >/dev/null 2>&1; then
+                selinux_status=$(getenforce 2>/dev/null)
+                echo "   SELinux: $selinux_status"
+                if [ "$selinux_status" = "Enforcing" ]; then
+                    echo "    SELinux pode estar bloqueando escrita de arquivos"
+                fi
+            fi
+
+            echo "   Permissões diretório: $(ls -ld . | awk '{print $1, $3, $4}')"
+            echo ""
+            echo "SOLUÇÕES MANUAIS:"
+            echo ""
+            echo "# Método A: Redirecionamento puro (evita SELinux)"
+            echo "$container_runtime run --rm ${IMAGE} cat /app/scripts/generate_pdf.py > generate_pdf.py"
+            echo ""
+            echo "# Método B: Com privilégios sudo"
+            echo "sudo $container_runtime run --rm -v \$(pwd):/host-output ${IMAGE} \\"
+            echo "    cp /app/scripts/generate_pdf.py /host-output/"
+            echo "sudo chown \$(whoami):\$(whoami) generate_pdf.py"
+            echo ""
+            echo "# Método C: Desabilitar SELinux temporariamente"
+            echo "sudo setenforce 0  # Temporário"
+            echo "# Execute extração novamente"
+            echo "sudo setenforce 1  # Reabilita"
+            echo ""
+
+            return 1
+        else
+            echo " Extração cancelada pelo usuário"
+            echo " Use os comandos manuais mostrados acima quando precisar"
+            echo ""
+        fi
+
+        # Pergunta se quer continuar mesmo assim
+        echo " OPÇÕES:"
+        echo "   [c] Continuar execução no container (pode falhar)"
+        echo "   [x] Cancelar operação"
+        echo ""
+        read -p "Sua escolha [c/x]: " -n 1 -r
+        echo ""
+
+        case $REPLY in
+            [Cc])
+                echo "Continuando no container (containers aninhados podem falhar)..."
+                echo ""
+                ;;
+            *)
+                echo "Operação cancelada pelo usuário"
+                echo "Execute o gerador de PDF no HOST para melhor compatibilidade"
+                exit 0
+                ;;
+        esac
+    fi
+}
+
 generate_ai_config() {
     if [ ! -f ai_config.json ]; then
         if [ -f .env ]; then
@@ -150,7 +377,7 @@ check_config_status() {
 }
 
 if [ $# -eq 0 ] || [ "$1" = "help" ] || [ "$1" = "--help" ]; then
-    echo "AI Health Check Tool - Ultra-Simple Wrapper"
+    echo "AI Health Check Tool - Simple Wrapper"
     echo ""
     echo "USAGE: $0 <command> [arguments]"
     echo ""
@@ -165,6 +392,14 @@ if [ $# -eq 0 ] || [ "$1" = "help" ] || [ "$1" = "--help" ]; then
     echo "       OPENAI_API_KEY=your_key_here"
     echo "    2. Run any command - ai_config.json will be auto-generated"
     echo ""
+    echo "PDF GENERATION:"
+    echo "    IMPORTANTE: Geradores de PDF devem rodar NO HOST"
+    echo "    Container → Podman → Pandoc causa problemas (containers aninhados)"
+    echo "    Solução: Use extração automática oferecida pelo script"
+    echo ""
+    echo "    Exemplo que acionará extração automática:"
+    echo "    $0 python scripts/generate_pdf.py relatorio.md"
+    echo ""
     echo "EXAMPLES:"
     echo "    $0 oc login -u admin -p pass https://api.cluster.com:6443"
     echo "    $0 scripts/data_collector.sh --help"
@@ -173,7 +408,9 @@ if [ $# -eq 0 ] || [ "$1" = "help" ] || [ "$1" = "--help" ]; then
     exit 0
 fi
 
+# Verifica se é uma tentativa de uso de gerador de PDF
 if [ "$1" != "help" ] && [ "$1" != "--help" ]; then
+    check_pdf_generator_usage "$@"
     check_selinux_status
     check_config_status
     generate_ai_config
