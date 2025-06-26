@@ -2,13 +2,14 @@
 
 # Wrapper Script
 # Andre Rocha
+# v0.2
 
 # License
 # This project is licensed under the [GNU General Public License v3 (GPLv3)](https://www.gnu.org/licenses/gpl-3.0.html).
 # See the `LICENSE` file for full details.
 
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
-IMAGE="quay.io/andrerocha_redhat/ai-health-check-tool:1.0.0-${ARCH}"
+IMAGE="quay.io/andrerocha_redhat/ai-health-check-tool:1.0.1-${ARCH}"
 
 # Function to detect and report SELinux status
 check_selinux_status() {
@@ -284,21 +285,7 @@ generate_ai_config() {
       "enabled": true,
       "api_key": "${GEMINI_API_KEY:-your_gemini_api_key_here}",
       "model": "gemini-2.5-pro-preview-03-25",
-      "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent"
-    },
-    {
-      "name": "claude",
-      "enabled": true,
-      "api_key": "${CLAUDE_API_KEY:-your_claude_api_key_here}",
-      "model": "claude-sonnet-4-20250514",
-      "endpoint": "https://api.anthropic.com/v1/messages"
-    },
-    {
-      "name": "openai",
-      "enabled": false,
-      "api_key": "${OPENAI_API_KEY:-your_openai_api_key_here}",
-      "model": "gpt-4.1",
-      "endpoint": "https://api.openai.com/v1/chat/completions"
+      "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
     }
   ],
   "analysis_settings": {
@@ -321,21 +308,7 @@ EOF
       "enabled": true,
       "api_key": "your_gemini_api_key_here",
       "model": "gemini-2.5-pro-preview-03-25",
-      "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent"
-    },
-    {
-      "name": "claude",
-      "enabled": true,
-      "api_key": "your_claude_api_key_here",
-      "model": "claude-sonnet-4-20250514",
-      "endpoint": "https://api.anthropic.com/v1/messages"
-    },
-    {
-      "name": "openai",
-      "enabled": false,
-      "api_key": "your_openai_api_key_here",
-      "model": "gpt-4.1",
-      "endpoint": "https://api.openai.com/v1/chat/completions"
+      "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
     }
   ],
   "analysis_settings": {
@@ -346,7 +319,7 @@ EOF
 }
 EOF
             echo "WARNING: Please edit ai_config.json and add your API keys"
-            echo "WARNING: Or create a .env file with GEMINI_API_KEY, CLAUDE_API_KEY, OPENAI_API_KEY"
+            echo "WARNING: Or create a .env file with GEMINI_API_KEY"
         fi
         echo ""
     fi
@@ -382,7 +355,7 @@ check_config_status() {
 
 # Simple help
 if [ $# -eq 0 ] || [ "$1" = "help" ] || [ "$1" = "--help" ]; then
-    echo "AI Health Check Tool - Ultra-Simple Wrapper"
+    echo "AI Health Check Tool - Simple Wrapper"
     echo ""
     echo "USAGE: $0 <command> [arguments]"
     echo ""
@@ -393,8 +366,6 @@ if [ $# -eq 0 ] || [ "$1" = "help" ] || [ "$1" = "--help" ]; then
     echo "SETUP:"
     echo "    1. Create .env file with your API keys:"
     echo "       GEMINI_API_KEY=your_key_here"
-    echo "       CLAUDE_API_KEY=your_key_here"
-    echo "       OPENAI_API_KEY=your_key_here"
     echo "    2. Run any command - ai_config.json will be auto-generated"
     echo ""
     echo "PDF GENERATION:"
